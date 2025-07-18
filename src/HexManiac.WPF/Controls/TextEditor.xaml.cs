@@ -62,7 +62,7 @@ namespace HavenSoft.HexManiac.WPF.Controls {
             SelectionChanged?.Invoke(this, e);
          };
          DataContextChanged += HandleDataContextChanged;
-         // ExtentWidth is not a DependencyProperty, so check for the horizontal scroll bar when the text chanegs
+         // ExtentWidth is not a DependencyProperty, so check for the horizontal scroll bar when the text changes
          TransparentLayer.TextChanged += (sender, e) => {
             // measure the width of the text, since ExtentWidth hasn't been updated yet.
             var typeface = new Typeface(TransparentLayer.FontFamily, FontStyles.Normal, FontWeights.Normal, FontStretches.Normal);
