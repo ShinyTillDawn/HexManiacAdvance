@@ -26,6 +26,8 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Tools {
          }
       }
 
+      public TextEditorViewModel ElementContent { get; } = new();
+
       protected void HandleNewDataStream(IStreamRun oldRun, IStreamRun newRun, IReadOnlyList<int> changedOffsets, IReadOnlyList<int> changedRuns) {
          Model.ObserveRunWritten(ViewPort.CurrentChange, newRun);
          if (oldRun.Start != newRun.Start) {
@@ -33,7 +35,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Tools {
          }
 
          if (Model.GetNextRun(newRun.Start) is ITableRun table) {
-            foreach(var change in changedOffsets) {
+            foreach (var change in changedOffsets) {
                var offsets = table.ConvertByteOffsetToArrayOffset(change);
                var info = table.NotifyChildren(Model, ViewPort.CurrentChange, offsets.ElementIndex, offsets.SegmentIndex);
                ViewPort.HandleErrorInfo(info);
@@ -65,6 +67,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Tools {
          var destination = viewPort.Model.ReadPointer(Start);
          if (viewPort.Model.GetNextRun(destination) is IStreamRun run) {
             content = run.SerializeRun() ?? string.Empty;
+            ElementContent.PreFormatter = run.PreFormatter;
          } else if (viewPort.Model.GetNextRun(destination) is ITableRun tRun) {
             var proxy = new TableStreamRun(Model, tRun.Start, tRun.PointerSources, tRun.FormatString,
                tRun.ElementContent, new FixedLengthStreamStrategy(tRun.ElementCount));
@@ -72,6 +75,9 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Tools {
          } else {
             content = string.Empty;
          }
+
+         ElementContent.Content = content;
+         ElementContent.Bind(nameof(ElementContent.Content), (sender, e) => Content = ElementContent.Content);
       }
 
       protected override bool TryCopy(StreamElementViewModel other) {
@@ -79,6 +85,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Tools {
          if (!(other is TextStreamElementViewModel stream)) return false;
          Start = other.Start;
          TryUpdate(ref content, stream.content, nameof(Content));
+         ElementContent.Content = Content;
          NotifyPropertyChanged(nameof(Visualizations));
          return true;
       }

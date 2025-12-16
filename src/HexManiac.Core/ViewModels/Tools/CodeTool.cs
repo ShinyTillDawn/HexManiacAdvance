@@ -325,8 +325,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Tools {
          if (run != null && run.Start != body.Address) run = null;
 
          int length = parser.FindLength(model, body.Address);
-         // don't need to run this if they're still typing
-         recompileTimer.DelayCall(TimeSpan.FromSeconds(.5), () => {
+         Action action = () => {
             var initialStart = selection.Scroll.ViewPointToDataIndex(selection.SelectionStart);
             var initialEnd = selection.Scroll.ViewPointToDataIndex(selection.SelectionEnd);
             if (initialStart > initialEnd) (initialStart, initialEnd) = (initialEnd, initialStart);
@@ -356,7 +355,16 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Tools {
                body.Address = start; // in case of the code getting repointed
             }
             UpdateContents(start, parser, body.Address, length);
-         });
+         };
+
+         // don't need to run this if they're still typing
+         /*
+         action();
+         /*/
+         body.CaretPosition += ScriptParser.InsertMissingClosers(ref codeContent, body.CaretPosition);
+         body.Content = codeContent;
+         recompileTimer.DelayCall(TimeSpan.FromSeconds(.5), action);
+         //*/
       }
 
       private void UpdateScriptHelpFromLine(object sender, HelpContext context) {
@@ -386,12 +394,17 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Tools {
          if (start > end) (start, end) = (end, start);
          int length = end - start + 1;
          int originalLength = length;
-         var code = thumb.Compile(model, start, out var newRuns, Content.Split(Environment.NewLine));
+         var code = thumb.Compile(model, start, out var newRuns, Content.Split(new[] { Environment.NewLine, "\n" }, StringSplitOptions.None));
 
          // if more length is needed and the next available bytes are free, allow it.
          while (code.Count > length && model.Count > start + length + 1 && model[start + length] == 0xFF && model[start + length + 1] == 0xFF) length += 2;
 
-         if (code.Count > length) return;
+         if (code.Count > length) {
+            ErrorText = $"Thumb compiled to {code.Count} bytes, but only {length} bytes are available.";
+            ShowErrorText = true;
+            return;
+         }
+         ShowErrorText = false;
 
          model.ClearFormat(history.CurrentChange, start + 1, length - 1);
          for (int i = 0; i < code.Count; i++) history.CurrentChange.ChangeData(model, start + i, code[i]);
@@ -435,6 +448,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Tools {
             var originalCodeContent = codeContent;
             int caret = body.CaretPosition;
             body.ClearErrors();
+            body.EvaluateTextLength();
             parser.CompileError += body.WatchForCompileErrors;
             var code = parser.Compile(history.CurrentChange, model, start, ref codeContent, ref caret, body, out var movedData, out int ignoreCharacterCount);
             parser.CompileError -= body.WatchForCompileErrors;
@@ -576,6 +590,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Tools {
          }
          return result;
       }
+      public IEnumerable<TextSegment> FindErrors(string content) { yield break; }
    }
 
    public record HelpContext(string Line, int Index, int ContentBoundaryCount = 0, int ContentBoundaryIndex = -1, bool IsSelection = false);

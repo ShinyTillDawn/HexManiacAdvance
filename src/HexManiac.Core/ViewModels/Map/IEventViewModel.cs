@@ -1,5 +1,4 @@
-﻿using HavenSoft.HexManiac.Core;
-using HavenSoft.HexManiac.Core.Models;
+﻿using HavenSoft.HexManiac.Core.Models;
 using HavenSoft.HexManiac.Core.Models.Code;
 using HavenSoft.HexManiac.Core.Models.Map;
 using HavenSoft.HexManiac.Core.Models.Runs;
@@ -12,6 +11,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Data;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -393,7 +393,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Map {
       private static readonly Point[] focalPoints = new[] { new Point(0, 7), new Point(7, 0), new Point(15, 8), new Point(8, 15) };
       public static IPixelViewModel BuildEventRender(short color, bool indentSides = false) {
          var pixels = new short[256];
-         
+
          for (int x = 1; x < 15; x++) {
             for (int y = 1; y < 15; y++) {
                if (((x + y) & 1) != 0) continue;
@@ -417,7 +417,15 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Map {
       }
    }
 
+   public class EventTextViewModel : ViewModelCore {
+      private int pointerAddress;
+      public int PointerAddress { get => pointerAddress; set => Set(ref pointerAddress, value, old => NotifyPropertyChanged(nameof(PointerAddressText))); }
+      public string PointerAddressText => PointerAddress.ToAddress();
+      public TextEditorViewModel Text { get; } = new();
+   }
+
    public class ObjectEventViewModel : BaseEventViewModel {
+      private readonly BlockMapViewModel parent;
       private readonly ScriptParser parser;
       private readonly EventTemplate eventTemplate;
       private readonly BerryInfo berries;
@@ -441,6 +449,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Map {
             element.SetValue("graphics", value);
             RaiseEventVisualUpdated();
             NotifyPropertyChanged();
+            NotifyPropertyChanged(nameof(HasGraphicsInTransitionScript), nameof(CanAddDynamicGraphicsToTransitionScript));
          }
       }
 
@@ -455,6 +464,8 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Map {
             graphicsText = value;
             if (!graphicsText.TryParseInt(out var result)) return;
             Graphics = result;
+            NotifyPropertyChanged(nameof(CanAddDynamicGraphicsToTransitionScript), nameof(HasGraphicsInTransitionScript));
+            if (HasGraphicsInTransitionScript) LoadDynamicOverworldGraphicsCategories();
          }
       }
 
@@ -464,10 +475,166 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Map {
          set {
             Set(ref showGraphicsAsText, value, old => {
                graphicsText = null;
-               NotifyPropertyChanged(nameof(GraphicsText));
+               NotifyPropertiesChanged(nameof(GraphicsText), nameof(CanAddDynamicGraphicsToTransitionScript), nameof(HasGraphicsInTransitionScript));
+               if (value) {
+                  LoadDynamicOverworldGraphicsCategories();
+               }
             });
          }
       }
+
+      #region Dynamic Overworld Graphics
+
+      public bool CanAddDynamicGraphicsToTransitionScript => !HasGraphicsInTransitionScript && ShowGraphicsAsText && Graphics >= 240;
+
+      public void AddDynamicGraphicsToTransitionScript() {
+         if (HasGraphicsInTransitionScript) return;
+         var scripts = new MapScriptCollection(parent.ViewPort, eventTemplate);
+         scripts.Load(parent.GetMapModel());
+         bool transitionScriptFound = false;
+         foreach (var script in scripts.Scripts) {
+            if (script.ScriptOptions[script.ScriptTypeIndex].Option != "Transition") continue;
+            transitionScriptFound = true;
+            var tool = parent.ViewPort.Tools.CodeTool;
+
+            parent.ViewPort.GotoScript(script.ScriptAddress);
+            var body = tool.Contents[0];
+            body.Content = $"setvar gfx{Graphics - 240} 18" + Environment.NewLine + body.Content;
+            break;
+         }
+         if (!transitionScriptFound) {
+            scripts.AddScript();
+            scripts.Scripts.Last().ScriptTypeIndex = 2; // Transition
+            AddDynamicGraphicsToTransitionScript();
+         }
+      }
+
+      public int PullValueFromTransitionScript() {
+         var scripts = new MapScriptCollection(parent.ViewPort, eventTemplate);
+         scripts.Load(parent.GetMapModel());
+         foreach (var script in scripts.Scripts) {
+            if (script.ScriptOptions[script.ScriptTypeIndex].Option != "Transition") continue;
+
+            var spots = Flags.GetAllScriptSpots(Element.Model, parser, new[] { script.ScriptAddress }, 0x16).
+               Where(spot => Element.Model.ReadMultiByteValue(spot.Address + 1, 2) == 0x4010 + Graphics - 240); // setvar gfxN
+
+            var spot = spots.FirstOrDefault();
+            if (spot is null) continue;
+            var categoryIndex = DynamicOverworldGraphicsCategories.SelectedIndex;
+            var dynamicValue = element.Model.ReadMultiByteValue(spot.Address + 3, 2);
+            return dynamicValue;
+         }
+         return -1;
+      }
+
+      public bool HasGraphicsInTransitionScript {
+         get {
+            if (!ShowGraphicsAsText) return false; // short circuit: if we're not doing dynamic graphics, don't show anything
+            // check that we have a transition script that sets graphics
+            var scripts = new MapScriptCollection(parent.ViewPort, eventTemplate);
+            scripts.Load(parent.GetMapModel());
+            foreach (var script in scripts.Scripts) {
+               if (script.ScriptOptions[script.ScriptTypeIndex].Option != "Transition") continue;
+               var spots = Flags.GetAllScriptSpots(Element.Model, parser, new[] { script.ScriptAddress }, 0x16).
+                  Where(spot => Element.Model.ReadMultiByteValue(spot.Address + 1, 2) == 0x4010 + Graphics - 240); // setvar gfxN
+
+               if (spots.Count() > 0) return true;
+            }
+            return false;
+         }
+      }
+      public void UpdateDynamicOverworldGraphicsInScript() {
+         if (DynamicOverworldGraphicsSelectedIndex == -1) return;
+         var scripts = new MapScriptCollection(parent.ViewPort, eventTemplate);
+         scripts.Load(parent.GetMapModel());
+         foreach (var script in scripts.Scripts) {
+            if (script.ScriptOptions[script.ScriptTypeIndex].Option != "Transition") continue;
+
+            var spots = Flags.GetAllScriptSpots(Element.Model, parser, new[] { script.ScriptAddress }, 0x16).
+               Where(spot => Element.Model.ReadMultiByteValue(spot.Address + 1, 2) == 0x4010 + Graphics - 240); // setvar gfxN
+
+            var spot = spots.FirstOrDefault();
+            if (spot is null) continue;
+            var categoryIndex = DynamicOverworldGraphicsCategories.SelectedIndex;
+            var dynamicOffset = 0;
+            if (DynamicOverworldGraphicsCategories.FilteredOptions[categoryIndex].Text == "Pokemon Icons") dynamicOffset = 10000;
+            if (DynamicOverworldGraphicsCategories.FilteredOptions[categoryIndex].Text == "Expanded Overworld Sprites") dynamicOffset = 20000;
+            var existingValue = Element.Model.ReadMultiByteValue(spot.Address + 3, 2);
+            if (existingValue == DynamicOverworldGraphicsSelectedIndex + dynamicOffset) continue;
+            Element.Model.WriteMultiByteValue(spot.Address + 3, 2, Token, DynamicOverworldGraphicsSelectedIndex + dynamicOffset);
+            RaiseEventVisualUpdated();
+         }
+      }
+      private IDisposable previousCategoryListener;
+      private void LoadDynamicOverworldGraphicsCategories() {
+         var options = new List<string>();
+         if (Element.Model.GetTable("graphics.overworld.sprites") != null) options.Add("Overworld Sprites");
+         if (Element.Model.GetTable("graphics.overworld.pokemon") != null) options.Add("Pokemon Icons");
+         if (Element.Model.GetTable("graphics.overworld.sprites20k") != null) options.Add("Expanded Overworld Sprites");
+         if (options.Count == 0) return;
+         var scripts = new MapScriptCollection(parent.ViewPort, eventTemplate);
+         scripts.Load(parent.GetMapModel());
+         var selectedIndex = 0;
+         foreach (var script in scripts.Scripts) {
+            if (script.ScriptOptions[script.ScriptTypeIndex].Option != "Transition") continue;
+            var spots = Flags.GetAllScriptSpots(Element.Model, parser, new[] { script.ScriptAddress }, 0x16).
+               Where(spot => Element.Model.ReadMultiByteValue(spot.Address + 1, 2) == 0x4010 + Graphics - 240); // setvar gfxN
+            var spot = spots.FirstOrDefault();
+            if (spot is null) continue;
+            var desiredTable = Element.Model.ReadMultiByteValue(spot.Address + 3, 2) / 10000;
+            if (desiredTable == 0) selectedIndex = options.IndexOf("Overworld Sprites");
+            if (desiredTable == 1) selectedIndex = options.IndexOf("Pokemon Icons");
+            if (desiredTable == 2) selectedIndex = options.IndexOf("Expanded Overworld Sprites");
+            if (selectedIndex == -1) selectedIndex = 0;
+         }
+
+         previousCategoryListener?.Dispose();
+         DynamicOverworldGraphicsCategories.Update(options.Select((option, i) => new ComboOption(option, i)), selectedIndex);
+         LoadDynamicOverworldGraphicsOptions();
+         previousCategoryListener = DynamicOverworldGraphicsCategories.Bind(nameof(FilteringComboOptions.SelectedIndex), (options, args) => LoadDynamicOverworldGraphicsOptions());
+      }
+
+      // depending on the selected category, load the sprites
+      private void LoadDynamicOverworldGraphicsOptions() {
+         var model = element.Model;
+         var categoryText = DynamicOverworldGraphicsCategories.FilteredOptions[DynamicOverworldGraphicsCategories.SelectedIndex].Text;
+         if (categoryText == "Overworld Sprites") {
+            DynamicOverworldOptions.Clear();
+            foreach (var option in Options) DynamicOverworldOptions.Add(VisualComboOption.CreateFromSprite(option.Text, option.PixelData, option.PixelWidth, option.Index, 2, true));
+            DynamicOverworldGraphicsSelectedIndex = PullValueFromTransitionScript();
+         } else if (categoryText == "Pokemon Icons") {
+            int index = -1;
+            DynamicOverworldOptions.Clear();
+            foreach (var mon in new ModelTable(model, model.GetTable("graphics.overworld.pokemon"))) {
+               index += 1;
+               var run = model.GetNextRun(mon.GetAddress("sprite")) as ISpriteRun;
+               if (run is null) continue;
+               var sprite = ReadonlyPixelViewModel.Create(model, run);
+               sprite = ReadonlyPixelViewModel.Crop(sprite, 0, 0, sprite.PixelWidth, sprite.PixelWidth);
+               DynamicOverworldOptions.Add(VisualComboOption.CreateFromSprite(index.ToString(), sprite.PixelData, sprite.PixelWidth, index, 2, true));
+            }
+            DynamicOverworldGraphicsSelectedIndex = PullValueFromTransitionScript() - 10000;
+         } else if (categoryText == "Expanded Overworld Sprites") {
+            int index = -1;
+            DynamicOverworldOptions.Clear();
+            foreach (var item in new ModelTable(model, model.GetTable("graphics.overworld.sprites20k"))) {
+               index += 1;
+               var sprites = item.GetSubTable("sprites");
+               if (sprites is null) continue;
+               var run = model.GetNextRun(sprites[0].GetAddress("sprite")) as ISpriteRun;
+               if (run is null) continue;
+               var sprite = ReadonlyPixelViewModel.Create(model, run);
+               DynamicOverworldOptions.Add(VisualComboOption.CreateFromSprite(index.ToString(), sprite.PixelData, sprite.PixelWidth, index, 2, true));
+            }
+            DynamicOverworldGraphicsSelectedIndex = PullValueFromTransitionScript() - 20000;
+         }
+      }
+      public FilteringComboOptions DynamicOverworldGraphicsCategories { get; } = new();
+      private int dynamicGraphicsIndex;
+      public int DynamicOverworldGraphicsSelectedIndex { get => dynamicGraphicsIndex; set => Set(ref dynamicGraphicsIndex, value, old => UpdateDynamicOverworldGraphicsInScript()); }
+      public ObservableCollection<VisualComboOption> DynamicOverworldOptions { get; } = new();
+
+      #endregion
 
       /// <summary>
       /// FireRed Only.
@@ -725,6 +892,8 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Map {
 
       public bool ShowTrainerContent => EventTemplate.GetTrainerContent(element.Model, this) != null && TrainerType != 0;
 
+      public TextEditorViewModel TrainerContent { get; } = new();
+
       public int TrainerClass {
          get {
             var trainerContent = EventTemplate.GetTrainerContent(element.Model, this);
@@ -980,7 +1149,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Map {
       public bool ShowTutorContent {
          get {
             var content = tutorContent.Value;
-            if (content != null && TutorOptions .AllOptions == null) {
+            if (content != null && TutorOptions.AllOptions == null) {
                TutorOptions.Update(ComboOption.Convert(element.Model.GetOptions(HardcodeTablesModel.MoveTutors)), TutorNumber);
                TutorOptions.Bind(nameof(TutorOptions.SelectedIndex), (sender, e) => TutorNumber = TutorOptions.SelectedIndex);
             }
@@ -990,7 +1159,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Map {
 
       private TextEditorViewModel tutorInfoEditor, tutorWhichPokemonEditor, tutorFailedEditor, tutorSuccessEditor;
       public TextEditorViewModel TutorInfoText => CreateTextEditor(ref tutorInfoEditor, () => tutorContent.Value?.InfoPointer);
-      public TextEditorViewModel TutorWhichPokemonText => CreateTextEditor(ref tutorWhichPokemonEditor , () => tutorContent.Value?.WhichPokemonPointer);
+      public TextEditorViewModel TutorWhichPokemonText => CreateTextEditor(ref tutorWhichPokemonEditor, () => tutorContent.Value?.WhichPokemonPointer);
       public TextEditorViewModel TutorFailedText => CreateTextEditor(ref tutorFailedEditor, () => tutorContent.Value?.FailedPointer);
       public TextEditorViewModel TutorSucessText => CreateTextEditor(ref tutorSuccessEditor, () => tutorContent.Value?.SuccessPointer);
 
@@ -1178,6 +1347,87 @@ show:
          ShowBerryContent
       );
 
+      public ObservableCollection<EventTextViewModel> BasicText { get; } = new();
+      public ObservableCollection<int> BasicItemAddresses { get; } = new();
+      public ObservableCollection<int> BasicFlagAddresses { get; } = new();
+      private int basicFlag = -1;
+      public FilteringComboOptions BasicItem { get; } = new();
+      public bool HasBasicItem => (BasicItem.AllOptions?.Count ?? 0) > 0;
+      public int BasicFlag { get => basicFlag; set => Set(ref basicFlag, value, old => NotifyPropertyChanged(nameof(HasBasicFlag))); }
+      public bool HasBasicFlag => basicFlag != -1;
+      private string basicFlagText = string.Empty;
+      public string BasicFlagText {
+         get => basicFlagText;
+         set => Set(ref basicFlagText, value, old => {
+            if (!basicFlagText.TryParseHex(out int result)) return;
+            foreach (var address in BasicFlagAddresses) element.Model.WriteMultiByteValue(address, 2, Token, result);
+            basicFlag = result;
+            NotifyPropertyChanged(nameof(BasicFlag));
+         });
+      }
+
+      private void FillBasicContent() {
+         // text
+         BasicText.Clear();
+         foreach (var spot in Flags.GetAllScriptSpots(Element.Model, parser, new[] { ScriptAddress }, 0x0F)) {
+            var element = new EventTextViewModel() { PointerAddress = spot.Address + 2, Text = { Content = GetText(spot.Address + 2) } };
+            element.Text.Bind(nameof(TextEditorViewModel.Content), (editor, e) => {
+               var newStart = SetText(spot.Address + 2, editor.Content, "Unknown", "BasicText");
+               if (newStart != -1) element.PointerAddress = newStart;
+            });
+            BasicText.Add(element);
+         }
+
+         // items
+         BasicItemAddresses.Clear();
+         var filter = new List<byte>();
+         foreach (var line in parser.DependsOn(HardcodeTablesModel.ItemsTableName)) {
+            if (line is MacroScriptLine macro && macro.Args[0] is SilentMatchArg silent) filter.Add(silent.ExpectedValue);
+            if (line is ScriptLine sl) filter.Add(line.LineCode[0]);
+         }
+         var spots = new List<int>();
+         var item = -1;
+         foreach (var spot in Flags.GetAllScriptSpots(element.Model, parser, new[] { ScriptAddress }, true, filter.ToArray())) {
+            var offset = spot.Address + spot.Line.Args.Until(arg => arg.EnumTableName == HardcodeTablesModel.ItemsTableName).Sum(arg => arg.Length(Element.Model, -1)) + spot.Line.LineCode.Count;
+            var chosenItem = Element.Model.ReadMultiByteValue(offset, 2);
+            if (item == -1 || item == chosenItem) {
+               item = chosenItem;
+               spots.Add(offset);
+            } else {
+               spots.Clear();
+               break;
+            }
+         }
+         if (spots.Count > 0) {
+            BasicItem.Update(ComboOption.Convert(element.Model.GetOptions(HardcodeTablesModel.ItemsTableName)), item);
+            foreach (var address in spots.Distinct()) BasicItemAddresses.Add(address);
+            BasicItem.Bind(nameof(BasicItem.SelectedIndex), (sender, e) => {
+               foreach (var address in BasicItemAddresses) element.Model.WriteMultiByteValue(address, 2, Token, sender.SelectedIndex);
+            });
+         }
+
+         // flags
+         BasicFlagAddresses.Clear();
+         spots.Clear();
+         var flag = -1;
+         foreach (var spot in Flags.GetAllScriptSpots(element.Model, parser, new[] { ScriptAddress }, false, 0x29, 0x2A, 0x2B)) { // setflag, clearflag, checkflag
+            var offset = spot.Address + 1;
+            var chosenFlag = element.Model.ReadMultiByteValue(offset, 2);
+            if (flag == -1 || flag == chosenFlag) {
+               flag = chosenFlag;
+               spots.Add(offset);
+            } else {
+               spots.Clear();
+               break;
+            }
+         }
+         if (spots.Count > 0) {
+            BasicFlag = flag;
+            foreach (var address in spots.Distinct()) BasicFlagAddresses.Add(address);
+            basicFlagText = flag.ToString("X4");
+         }
+      }
+
       #endregion
 
       private string GetText(ref string cache, int? pointer) {
@@ -1198,16 +1448,18 @@ show:
          return base.GetText((int)pointer);
       }
 
-      private void SetText(int? pointer, string value, string type, [CallerMemberName] string propertyName = null) {
-         if (pointer == null) return;
+      private int SetText(int? pointer, string value, string type, [CallerMemberName] string propertyName = null) {
+         if (pointer == null) return -1;
          var newStart = base.SetText((int)pointer, value, propertyName);
          if (newStart != -1) DataMoved.Raise(this, new(type, newStart));
+         return newStart;
       }
 
       #endregion
 
-      public ObjectEventViewModel(ScriptParser parser, Action<int> gotoAddress, ModelArrayElement objectEvent, EventTemplate eventTemplate, IReadOnlyList<IPixelViewModel> sprites, IPixelViewModel defaultSprite, BerryInfo berries) : base(objectEvent, "objectCount") {
-         this.parser = parser;
+      public ObjectEventViewModel(BlockMapViewModel parent, Action<int> gotoAddress, ModelArrayElement objectEvent, EventTemplate eventTemplate, IReadOnlyList<IPixelViewModel> sprites, IPixelViewModel defaultSprite, BerryInfo berries) : base(objectEvent, "objectCount") {
+         this.parent = parent;
+         this.parser = parent.ViewPort.Tools.CodeTool.ScriptParser;
          this.gotoAddress = gotoAddress;
          this.eventTemplate = eventTemplate;
          this.berries = berries;
@@ -1237,8 +1489,13 @@ show:
          martContent = new Lazy<MartEventContent>(() => EventTemplate.GetMartContent(element.Model, parser, this));
          tradeContent = new Lazy<TradeEventContent>(() => EventTemplate.GetTradeContent(element.Model, parser, this.ScriptAddress));
          legendaryContent = new Lazy<LegendaryEventContent>(() => EventTemplate.GetLegendaryEventContent(element.Model, parser, this));
+         if (ShowNoContent) FillBasicContent();
 
          UpdateScriptError(ScriptAddress);
+
+         TrainerContent.PreFormatter = new TrainerTextFormatter(objectEvent.Model);
+         TrainerContent.Content = TrainerTeam;
+         TrainerContent.Bind(nameof(TextEditorViewModel.Content), (sender, e) => TrainerTeam = sender.Content);
       }
 
       public override int TopOffset => 16 - (EventRender?.PixelHeight ?? 0);
@@ -1254,28 +1511,60 @@ show:
             76 => 76, // invisible
             _ => 0,
          };
-         EventRender = Render(model, owTable, DefaultOW, Graphics, facing);
+         EventRender = Render(model, owTable, DefaultOW, Graphics, facing, PullValueFromTransitionScript);
          NotifyPropertyChanged(nameof(EventRender));
       }
 
       /// <param name="facing">(0, 1, 2, 3) = (down, up, left, right)</param>
-      public static IPixelViewModel Render(IDataModel model, ModelTable owTable, IPixelViewModel defaultOW, int index, int facing) {
-         if (owTable == null || index >= owTable.Count) return defaultOW;
-         var element = owTable[index];
-         var dataTable = element.GetSubTable("data");
-         if (dataTable == null) return defaultOW;
-         var data = dataTable[0];
+      public static IPixelViewModel Render(IDataModel model, ModelTable owTable, IPixelViewModel defaultOW, int index, int facing, Func<int> dynamicSprites) {
+         // special case: gfx variables
+         if (index >= 240 && index <= 255) {
+            var fromScript = dynamicSprites();
+            if (fromScript > -1) index = fromScript;
+         }
+
+         // special case: expanded OWs for pokemon / sprites20k (HMA expansion utility integration)
+         ModelTable dataTable;
+         if (index.InRange(10000, 20000)) {
+            dataTable = model.GetTableModel("graphics.overworld.pokemon");
+            index -= 10000;
+
+         } else if (index.InRange(20000, 30000)) {
+            dataTable = model.GetTableModel("graphics.overworld.sprites20k");
+            index -= 20000;
+
+         } else {
+            if (owTable == null || index >= owTable.Count) return defaultOW;
+            dataTable = owTable[index].GetSubTable("data");
+            index = 0;
+
+         }
+
+         if (dataTable is null) return defaultOW;
+         if (index >= dataTable.Count) return defaultOW;
+         var data = dataTable[index];
          var sprites = data.GetSubTable("sprites");
-         if (sprites == null) return defaultOW;
-         bool invisible = facing == 76;
-         bool flip = facing == 3;
-         if (facing == 3) facing = 2;
-         if (facing >= sprites.Count) facing = 0;
-         var graphicsAddress = sprites.Run.Start;
+
+         int graphicsAddress;
+         bool invisible = false;
+         bool flip = false;
+         if (sprites == null) {
+            // overworld.pokemon
+            graphicsAddress = data.GetAddress("sprite");
+            if (graphicsAddress == Pointer.NULL) return defaultOW;
+         } else {
+            // overworld.sprites or overworld.sprites20k
+            invisible = facing == 76;
+            flip = facing == 3;
+            if (facing == 3) facing = 2;
+            if (facing >= sprites.Count) facing = 0;
+            graphicsAddress = sprites.Run.Start;
+         }
+
          var pointerAddress = data.Start;
          var graphicsRun = model.GetNextRun(graphicsAddress) as ISpriteRun;
          var paletteRun = graphicsRun.FindRelatedPalettes(model, pointerAddress).FirstOrDefault();
-         if (facing != -1) {
+         if (facing != -1 && sprites is not null) {
             var sprite = sprites[facing];
             graphicsAddress = sprite.GetAddress("sprite");
             graphicsRun = model.GetNextRun(graphicsAddress) as ISpriteRun;
@@ -1283,6 +1572,7 @@ show:
          if (graphicsRun == null) return defaultOW;
          if (paletteRun == null) return defaultOW;
          var ow = ReadonlyPixelViewModel.Create(model, graphicsRun, paletteRun, true);
+         if (sprites is null) ow = ReadonlyPixelViewModel.Crop(ow, 0, 0, ow.PixelWidth, ow.PixelHeight / 2);
          if (invisible) ow = BuildInvisibleEventRender(ow);
          if (flip) ow = ow.ReflectX();
          return ow;
@@ -1754,6 +2044,9 @@ show:
       public TrainerTeamViewModel(IDataModel model, int trainerID, Func<ModelDelta> tokenGenerator) {
          (this.model, this.trainerID) = (model, trainerID);
          this.tokenGenerator = tokenGenerator;
+         TrainerContent.PreFormatter = new TrainerTextFormatter(model);
+         TrainerContent.Content = TrainerTeam;
+         TrainerContent.Bind(nameof(TextEditorViewModel.Content), (sender, e) => TrainerTeam = sender.Content);
       }
 
       public string TrainerIDText {
@@ -1792,6 +2085,8 @@ show:
             NotifyPropertyChanged();
          }
       }
+
+      public TextEditorViewModel TrainerContent { get; } = new();
 
       public ObservableCollection<IPixelViewModel> TeamVisualizations { get; } = new();
 

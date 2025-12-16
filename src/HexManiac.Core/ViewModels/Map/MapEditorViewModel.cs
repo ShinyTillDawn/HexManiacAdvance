@@ -10,6 +10,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Input;
 
@@ -181,6 +182,24 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Map {
                      tilesToDraw[x, y] |= collisionIndex << 10;
                   }
                }
+            }
+         }
+      }
+
+      public bool IsSingleBlock => tilesToDraw is not null && tilesToDraw.GetLength(0) == 1 && tilesToDraw.GetLength(1) == 1;
+      public int BlockUsageCount {
+         get {
+            if (preferredCollisionsPrimary == null) CountCollisionForBlocks();
+            var layout = new LayoutModel(primaryMap?.GetLayout());
+            if (layout.PrimaryBlockset?.Start is not int primaryAddress) return -1;
+            if (layout.SecondaryBlockset?.Start is not int secondaryAddress) return -1;
+            if (!IsSingleBlock) return -1;
+
+            var isPrimary = drawBlockIndex < PrimaryBlocks;
+            if (isPrimary) {
+               return blockUsageCount[primaryAddress][drawBlockIndex];
+            } else {
+               return blockUsageCount[secondaryAddress][drawBlockIndex];
             }
          }
       }
@@ -361,6 +380,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Map {
       }
 
       public void NavigateTo(int bank, int map, int x, int y) {
+         viewPort.Tools.LogTool.LogMessages.Add($"Navigate to ({x}, {y}) in map {bank}.{map}");
          if (primaryMap != null) {
             backStack.Add(primaryMap.MapID);
             if (backStack.Count == 1) backCommand.RaiseCanExecuteChanged();
@@ -521,7 +541,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Map {
          foreach (var newM in newMaps) {
             bool match = false;
             foreach (var existingM in VisibleMaps) {
-               if (existingM.UpdateFrom(newM)) { 
+               if (existingM.UpdateFrom(newM)) {
                   match = true;
                   break;
                }
@@ -631,15 +651,17 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Map {
       public bool ShowBeneath { get => showBeneath; set => Set(ref showBeneath, value, old => PrimaryMap.ShowBeneath = ShowBeneath); }
 
       private bool hideEvents;
-      public bool HideEvents { get => hideEvents; set => Set(ref hideEvents, value, old => {
-         foreach (var m in VisibleMaps) m.ShowEvents = hideEvents ? MapDisplayOptions.NoEvents : MapDisplayOptions.AllEvents;
-         Tutorials.Complete(Tutorial.Ctrl_HideEvents);
-      }); }
+      public bool HideEvents {
+         get => hideEvents; set => Set(ref hideEvents, value, old => {
+            foreach (var m in VisibleMaps) m.ShowEvents = hideEvents ? MapDisplayOptions.NoEvents : MapDisplayOptions.AllEvents;
+            Tutorials.Complete(Tutorial.Ctrl_HideEvents);
+         });
+      }
 
       // if it returns an empty array: no hover tip to display
       // if it returns null: continue displaying previous hover tip
       // if it returns content: display that as the new hover tip
-      private static readonly object[] EmptyTooltip = new object[0]; 
+      private static readonly object[] EmptyTooltip = new object[0];
       public object Hover(double x, double y) {
          var map = MapUnderCursor(x, y);
          if (map == null) return EmptyTooltip;
@@ -756,7 +778,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Map {
             PrimaryMap.SurfConnection.FollowConnection();
             return;
          }
-         DrawDown(x, y, click);
+         if (DrawDown(x, y, click)) waveFunctionActive?.Cancel();
       }
 
       public void PrimaryMove(double x, double y) {
@@ -775,7 +797,8 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Map {
       }
 
       Point drawSource, lastDraw;
-      private void DrawDown(double x, double y, PrimaryInteractionStart click) {
+      private bool DrawDown(double x, double y, PrimaryInteractionStart click) {
+         bool didDraw = true;
          interactionType = PrimaryInteractionType.Draw;
          if ((click & PrimaryInteractionStart.ControlClick) != 0) interactionType = PrimaryInteractionType.RectangleDraw;
          if (use9Grid && IsValid9GridSelection) {
@@ -803,17 +826,20 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Map {
             lastDraw = drawSource;
             if (click == PrimaryInteractionStart.ControlClick) RectangleDrawMove(x, y);
             else if (interactionType == PrimaryInteractionType.Draw9Grid) Draw9Grid(x, y);
-            else if (click == PrimaryInteractionStart.Click) DrawMove(x, y);
+            else if (click == PrimaryInteractionStart.Click) didDraw = DrawMove(x, y);
          }
+         return didDraw;
       }
 
-      private void DrawMove(double x, double y) {
+      private bool DrawMove(double x, double y) {
+         var didDraw = false;
          var map = MapUnderCursor(x, y);
          if (map != null) {
             using (map.DeferPropertyNotifications()) {
                if (drawMultipleTiles && tilesToDraw != null) {
                   var tilePosition = ToBoundedMapTilePosition(map, x, y, tilesToDraw.GetLength(0), tilesToDraw.GetLength(1));
                   map.DrawBlocks(history.CurrentChange, tilesToDraw, drawSource, tilePosition);
+                  didDraw = true;
                } else {
                   var tilePosition = ToBoundedMapTilePosition(map, x, y, 1, 1);
                   if (drawBlockIndex < 0 && collisionIndex < 0) {
@@ -822,16 +848,20 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Map {
                         lastDraw = tilePosition;
                         FillBackup();
                         SwapBlocks(lastDraw, drawSource);
+                        didDraw = true;
                      }
                   } else if (blockBag.Contains(drawBlockIndex)) {
                      map.DrawBlock(history.CurrentChange, rnd.From(blockBag), collisionIndex, x, y);
+                     didDraw = true;
                   } else {
                      map.DrawBlock(history.CurrentChange, drawBlockIndex, collisionIndex, x, y);
+                     didDraw = true;
                   }
                }
             }
          }
          Hover(x, y);
+         return didDraw;
       }
 
       private void RectangleDrawMove(double x, double y) {
@@ -941,9 +971,12 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Map {
             eventCreationType = EventCreationType.None;
             // user wants to do a wave function collapse at this position
             if (map != primaryMap) return;
-            map.PaintWaveFunction(history.CurrentChange, x, y, RunWaveFunctionCollapseWithCollision);
+            if (waveFunctionPrimary == null) CalculateWaveCollapseProbabilities();
+            waveFunctionActive = new();
+            map.PaintWaveFunction(history.CurrentChange, x, y, RunWaveFunctionCollapseWithCollision, waveFunctionActive.Token);
          }
       }
+      private CancellationTokenSource? waveFunctionActive;
 
       #region Rectangle-Drawing helper methods
 
@@ -1072,7 +1105,10 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Map {
       private bool drawMultipleTiles;
       public bool DrawMultipleTiles {
          get => drawMultipleTiles;
-         private set => Set(ref drawMultipleTiles, value, old => NotifyPropertyChanged(nameof(BlockBagVisible)));
+         private set {
+            Set(ref drawMultipleTiles, value, old => NotifyPropertyChanged(nameof(BlockBagVisible)));
+            NotifyPropertiesChanged(nameof(IsSingleBlock), nameof(BlockUsageCount));
+         }
       }
 
       private bool blockEditorVisible;
@@ -1331,6 +1367,8 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Map {
 
       public ReadonlyPixelViewModel GetMapPreview(int bank, int map, int x, int y) {
          var blockmap = new BlockMapViewModel(FileSystem, Tutorials, viewPort, format, templates, bank, map) { AllOverworldSprites = primaryMap.AllOverworldSprites, IncludeBorders = false };
+         if (!blockmap.PixelWidth.InRange(16, 0x1000)) return null;
+         if (!blockmap.PixelHeight.InRange(16, 0x1000)) return null;
          var image = blockmap.AutoCrop(x, y);
          if (image != null) {
             return new ReadonlyPixelViewModel(image.PixelWidth, image.PixelHeight, image.PixelData);
@@ -1705,9 +1743,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Map {
          });
       }
       public bool IsValid9GridSelection {
-         get {
-            return tilesToDraw != null && tilesToDraw.GetLength(0) == 3 && tilesToDraw.GetLength(1) == 3;
-         }
+         get => tilesToDraw != null && tilesToDraw.GetLength(0) == 3 && tilesToDraw.GetLength(1) == 3;
       }
 
       public void SelectBlock(int x, int y) {
@@ -1912,11 +1948,19 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Map {
                         CheckPrimary(cells, x + 1, y, center, primaryWaveNeighbors, mixedWaveNeighbors, wn => wn.Right);
                         CheckPrimary(cells, x, y - 1, center, primaryWaveNeighbors, mixedWaveNeighbors, wn => wn.Up);
                         CheckPrimary(cells, x, y + 1, center, primaryWaveNeighbors, mixedWaveNeighbors, wn => wn.Down);
+                        CheckPrimary(cells, x - 1, y - 1, center, primaryWaveNeighbors, mixedWaveNeighbors, wn => wn.UpLeft);
+                        CheckPrimary(cells, x + 1, y - 1, center, primaryWaveNeighbors, mixedWaveNeighbors, wn => wn.UpRight);
+                        CheckPrimary(cells, x - 1, y + 1, center, primaryWaveNeighbors, mixedWaveNeighbors, wn => wn.DownLeft);
+                        CheckPrimary(cells, x + 1, y + 1, center, primaryWaveNeighbors, mixedWaveNeighbors, wn => wn.DownRight);
                      } else {
                         CheckSecondary(cells, x - 1, y, center, secondaryWaveNeighbors, mixedWaveNeighbors, wn => wn.Left);
                         CheckSecondary(cells, x + 1, y, center, secondaryWaveNeighbors, mixedWaveNeighbors, wn => wn.Right);
                         CheckSecondary(cells, x, y - 1, center, secondaryWaveNeighbors, mixedWaveNeighbors, wn => wn.Up);
                         CheckSecondary(cells, x, y + 1, center, secondaryWaveNeighbors, mixedWaveNeighbors, wn => wn.Down);
+                        CheckSecondary(cells, x - 1, y - 1, center, secondaryWaveNeighbors, mixedWaveNeighbors, wn => wn.UpLeft);
+                        CheckSecondary(cells, x + 1, y - 1, center, secondaryWaveNeighbors, mixedWaveNeighbors, wn => wn.UpRight);
+                        CheckSecondary(cells, x - 1, y + 1, center, secondaryWaveNeighbors, mixedWaveNeighbors, wn => wn.DownLeft);
+                        CheckSecondary(cells, x + 1, y + 1, center, secondaryWaveNeighbors, mixedWaveNeighbors, wn => wn.DownRight);
                      }
                   }
                }
@@ -1941,7 +1985,6 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Map {
       // if we still can't find a neighbor after that, leave it blank.
 
       private IList<CollapseProbability> RunWaveFunctionCollapse(int xx, int yy) {
-         if (waveFunctionPrimary == null) CalculateWaveCollapseProbabilities();
          var layout = new LayoutModel(PrimaryMap.GetLayout());
          var primary = layout.PrimaryBlockset.Start;
          var secondary = layout.SecondaryBlockset.Start;
@@ -1951,18 +1994,21 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Map {
          var mixedWaveNeighbors = waveFunctionMixed.Ensure(mixed, () => new WaveNeighbors[TotalBlocks]);
 
          var cells = layout.BlockMap;
+         // get the list of probabilities based on each neighbor
          var probabilities = new List<List<CollapseProbability>>();
          AddProbabilities(probabilities, cells, xx - 1, yy, primaryWaveNeighbors, secondaryWaveNeighbors, mixedWaveNeighbors, wv => wv.Right);
          AddProbabilities(probabilities, cells, xx + 1, yy, primaryWaveNeighbors, secondaryWaveNeighbors, mixedWaveNeighbors, wv => wv.Left);
          AddProbabilities(probabilities, cells, xx, yy - 1, primaryWaveNeighbors, secondaryWaveNeighbors, mixedWaveNeighbors, wv => wv.Down);
          AddProbabilities(probabilities, cells, xx, yy + 1, primaryWaveNeighbors, secondaryWaveNeighbors, mixedWaveNeighbors, wv => wv.Up);
+         AddProbabilities(probabilities, cells, xx - 1, yy - 1, primaryWaveNeighbors, secondaryWaveNeighbors, mixedWaveNeighbors, wv => wv.DownRight);
+         AddProbabilities(probabilities, cells, xx + 1, yy - 1, primaryWaveNeighbors, secondaryWaveNeighbors, mixedWaveNeighbors, wv => wv.DownLeft);
+         AddProbabilities(probabilities, cells, xx - 1, yy + 1, primaryWaveNeighbors, secondaryWaveNeighbors, mixedWaveNeighbors, wv => wv.UpRight);
+         AddProbabilities(probabilities, cells, xx + 1, yy + 1, primaryWaveNeighbors, secondaryWaveNeighbors, mixedWaveNeighbors, wv => wv.UpLeft);
 
-         // remove all the empty probability sets (they're not adding any restrictions)
-         for (int i = probabilities.Count - 1; i >= 0; i--) {
-            if (probabilities[i].Count == 0) probabilities.RemoveAt(i);
-         }
+         if (probabilities.Count == 0) return null; // no known neighbors, no restrictions... yet
 
-         // the block is constricted in options based on its neighbors
+         // combine the list of probabilities down to a single list by merging from all the neighbors.
+         // the block is constrained in options based on _all_ its neighbors together.
          // if the neighbor can only be A/B based on the left and only B/C based on the top, it must be B.
          while (probabilities.Count > 1) {
             var last = probabilities[probabilities.Count - 1];
@@ -1976,20 +2022,14 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Map {
                if (cp2 == null) continue; // no match
                merged.Add(new(cp1.Block) { Count = cp1.Count + cp2.Count });
             }
-            if (merged.Count == 0) {
-               // couldn't find a match
-               // matching one is better than matching neither
-               probabilities.Add(rnd.Next(2) == 0 ? last : next);
-            } else {
+            if (merged.Count != 0) {
                probabilities.Add(merged);
             }
          }
 
-         if (probabilities.Count == 0 || probabilities[0].Count == 0) {
-            // no restriction, pick any block
-            var (availableBlocks, _) = PrimaryMap.MapRepointer.EstimateBlockCount(layout.Element, true);
-            return availableBlocks.Range().Select(i => new CollapseProbability(i)).ToList();
-         }
+         // possible failure state: no probabilities were found. We had probabilities before merging, but none survived.
+         // we're returning 'null' if there are no restrictions. This is the opposite: the restrictions are so tight as to have no valid results.
+         if (probabilities.Count == 0) return new List<CollapseProbability>();
 
          // new version that returns the current probabilities, which need collapsing
          return probabilities[0];
@@ -1998,7 +2038,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Map {
       private void AddProbabilities(List<List<CollapseProbability>> probabilities, BlockCells cells, int xx, int yy, WaveNeighbors[] primaryWaveNeighbors, WaveNeighbors[] secondaryWaveNeighbors, WaveNeighbors[] mixedWaveNeighbors, Func<WaveNeighbors, List<CollapseProbability>> reverse) {
          if (xx < 0 || yy < 0 || xx >= cells.Width || yy >= cells.Height) return;
          var edge = cells[xx, yy].Tile;
-         if (edge == 0) return;
+         if (edge == 0) return; // this block is not yet decided. Do not add any constraints.
          if (IsPrimaryBlock(cells[xx, yy])) {
             var mergedProbabilities = new List<CollapseProbability>();
             if (primaryWaveNeighbors[edge] != null) mergedProbabilities.AddRange(reverse(primaryWaveNeighbors[edge]));
@@ -2018,11 +2058,11 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Map {
          if (x < 0 || x >= cells.Width || y < 0 || y >= cells.Height) return;
          var edge = cells[x, y];
          if (IsPrimaryBlock(edge)) {
-            if (primaryElement == null) primaryElement = primaryWaveNeighbors[center.Tile] = new(new(), new(), new(), new());
+            if (primaryElement == null) primaryElement = primaryWaveNeighbors[center.Tile] = new(new(), new(), new(), new(), new(), new(), new(), new());
             var collapse = direction(primaryElement).Ensure(cp => cp.Block == edge.Tile, new CollapseProbability(edge.Tile));
             collapse.Count += 1;
          } else {
-            if (mixedElement == null) mixedElement = mixedWaveNeighbors[center.Tile] = new(new(), new(), new(), new());
+            if (mixedElement == null) mixedElement = mixedWaveNeighbors[center.Tile] = new(new(), new(), new(), new(), new(), new(), new(), new());
             var collapse = direction(mixedElement).Ensure(cp => cp.Block == edge.Tile, new CollapseProbability(edge.Tile));
             collapse.Count += 1;
          }
@@ -2034,12 +2074,12 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Map {
          if (x < 0 || x >= cells.Width || y < 0 || y >= cells.Height) return;
          var edge = cells[x, y];
          if (IsPrimaryBlock(edge)) {
-            if (secondaryElement == null) secondaryElement = secondaryWaveNeighbors[center.Tile - PrimaryBlocks] = new(new(), new(), new(), new());
-            var collapse = direction(secondaryElement).Ensure(cp => cp.Block == edge.Tile, new CollapseProbability(edge.Tile));
+            if (mixedElement == null) mixedElement = mixedWaveNeighbors[center.Tile] = new(new(), new(), new(), new(), new(), new(), new(), new());
+            var collapse = direction(mixedElement).Ensure(cp => cp.Block == edge.Tile, new CollapseProbability(edge.Tile));
             collapse.Count += 1;
          } else {
-            if (mixedElement == null) mixedElement = mixedWaveNeighbors[center.Tile] = new(new(), new(), new(), new());
-            var collapse = direction(mixedElement).Ensure(cp => cp.Block == edge.Tile, new CollapseProbability(edge.Tile));
+            if (secondaryElement == null) secondaryElement = secondaryWaveNeighbors[center.Tile - PrimaryBlocks] = new(new(), new(), new(), new(), new(), new(), new(), new());
+            var collapse = direction(secondaryElement).Ensure(cp => cp.Block == edge.Tile, new CollapseProbability(edge.Tile));
             collapse.Count += 1;
          }
       }
@@ -2075,9 +2115,11 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Map {
 
       private Dictionary<long, int[]> preferredCollisionsPrimary;
       private Dictionary<long, int[]> preferredCollisionsSecondary;
+      private readonly AutoDictionary<long, AutoDictionary<int, int>> blockUsageCount = new(_ => new(_ => 0)); // for a tileset, for a block, the total number of times that block is used
       private void CountCollisionForBlocks() {
          preferredCollisionsPrimary = new Dictionary<long, int[]>();
          preferredCollisionsSecondary = new Dictionary<long, int[]>();
+         blockUsageCount.Clear();
 
          // step 1: count the usages of each collision for each block in each blockset
          var banksTable = model.GetTable(HardcodeTablesModel.MapBankTable);
@@ -2118,9 +2160,11 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Map {
                   var tile = pair & 0x3FF;
                   var isPrimary = tile < PrimaryTiles;
                   if (isPrimary) {
+                     blockUsageCount[address1][tile] += 1;
                      if (!blocks1[tile].TryGetValue(collision, out var value)) value = 0;
                      blocks1[tile][collision] = value + 1;
                   } else {
+                     blockUsageCount[address2][tile] += 1;
                      if (!blocks2[tile].TryGetValue(collision, out var value)) value = 0;
                      blocks2[tile][collision] = value + 1;
                   }
@@ -2254,7 +2298,10 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Map {
    }
 
    public record CollapseProbability(int Block) { public int Count { get; set; } };
-   public record WaveNeighbors(List<CollapseProbability> Left, List<CollapseProbability> Right, List<CollapseProbability> Up, List<CollapseProbability> Down);
+   public record WaveNeighbors(
+      List<CollapseProbability> Left, List<CollapseProbability> Right, List<CollapseProbability> Up, List<CollapseProbability> Down,
+      List<CollapseProbability> UpLeft, List<CollapseProbability> UpRight, List<CollapseProbability> DownLeft, List<CollapseProbability> DownRight
+      );
    public record WaveCell(IList<CollapseProbability> Probabilities, Func<int, int> GetCollision) {
       public int Collapse(Random rnd) {
          var totalOptions = Probabilities.Sum(cp => cp.Count);
@@ -2268,6 +2315,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Map {
          var collision = GetCollision(block);
          return (collision << 10) | block;
       }
+      public bool HasRestrictions => Probabilities is not null;
    }
 
    public enum SelectionInteractionResult { None, ShowMenu }
@@ -2309,5 +2357,5 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Map {
 
    public enum MapDisplayOptions { AllEvents, ObjectEvents, NoEvents }
 
-   public record TileSelection(int[]Tiles, int Width);
+   public record TileSelection(int[] Tiles, int Width);
 }

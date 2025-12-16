@@ -3,15 +3,66 @@ using HavenSoft.HexManiac.Core.Models.Runs;
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Linq;
 using System.Windows.Input;
 
 namespace HavenSoft.HexManiac.Core.ViewModels.Tools {
+   public class EmptyTool : IToolViewModel {
+      public static EmptyTool Instance { get; } = new();
+      public string Name => "None";
+      public event PropertyChangedEventHandler? PropertyChanged;
+      public void DataForCurrentRunChanged() { }
+   }
+
+   public class EmptyToolTray : IToolTrayViewModel {
+      public IToolViewModel this[int index] => EmptyTool.Instance;
+
+      public int SelectedIndex { get => -1; set { } }
+      public IToolViewModel SelectedTool { get => EmptyTool.Instance; set => throw new NotImplementedException(); }
+
+      public ICommand HideCommand => new StubCommand();
+
+      public ICommand StringToolCommand => new StubCommand();
+
+      public ICommand TableToolCommand => new StubCommand();
+
+      public ICommand CodeToolCommand => new StubCommand();
+
+      public ICommand SpriteToolCommand => new StubCommand();
+
+      public PCSTool? StringTool => null;
+
+      public TableTool? TableTool => null;
+
+      public CodeTool? CodeTool => null;
+
+      public SpriteTool? SpriteTool => null;
+
+      public LogTool? LogTool => null;
+
+      public IDisposable DeferUpdates => new StubDisposable();
+
+      public int Count => 0;
+
+      public event EventHandler<string> OnError;
+      public event EventHandler<string> OnMessage;
+      public event PropertyChangedEventHandler? PropertyChanged;
+
+      public IEnumerator<IToolViewModel> GetEnumerator() => Enumerable.Empty<IToolViewModel>().GetEnumerator();
+
+      public void RefreshContent() { }
+
+      public void Schedule(Action action) => action();
+
+      IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+   }
+
    public class ToolTray : ViewModelCore, IToolTrayViewModel {
       private readonly IList<IToolViewModel> tools;
       private readonly StubCommand hideCommand;
-      private readonly StubCommand stringToolCommand, tableToolCommand, codeToolCommand, spriteToolCommand;
+      private readonly StubCommand stringToolCommand, tableToolCommand, codeToolCommand, spriteToolCommand, logToolCommand;
       private readonly HashSet<Action> deferredWork = new HashSet<Action>();
       private readonly IDataModel model;
       private readonly Selection selection;
@@ -26,6 +77,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Tools {
                   if (SelectedTool == TableTool) TableTool.DataForCurrentRunChanged();
                   if (SelectedTool == SpriteTool) SpriteTool.DataForCurrentRunChanged();
                   if (SelectedTool == StringTool) StringTool.DataForCurrentRunChanged();
+                  if (SelectedTool == LogTool) LogTool.DataForCurrentRunChanged();
                   CodeTool.IsSelected = SelectedTool == CodeTool;
                }
             }
@@ -45,6 +97,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Tools {
       public ICommand TableToolCommand => tableToolCommand;
       public ICommand CodeToolCommand => codeToolCommand;
       public ICommand SpriteToolCommand => spriteToolCommand;
+      public ICommand LogToolCommand => logToolCommand;
 
       public PCSTool StringTool => (PCSTool)tools[1];
 
@@ -53,6 +106,8 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Tools {
       public CodeTool CodeTool => (CodeTool)tools[3];
 
       public SpriteTool SpriteTool => (SpriteTool)tools[2];
+
+      public LogTool LogTool => (LogTool)tools[4];
 
       private bool runningDeferredWork;
       private StubDisposable currentDeferralToken;
@@ -88,6 +143,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Tools {
             new PCSTool(viewPort, history, this),
             new SpriteTool(viewPort, history),
             new CodeTool(singletons, viewPort, selection, history, viewPort),
+            new LogTool(),
          };
 
          StubCommand commandFor(int i) => new StubCommand {
@@ -104,6 +160,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Tools {
          stringToolCommand = commandFor(1);
          spriteToolCommand = commandFor(2);
          codeToolCommand = commandFor(3);
+         logToolCommand = commandFor(4);
 
          hideCommand = new StubCommand {
             CanExecute = arg => SelectedIndex != -1,
@@ -133,6 +190,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Tools {
          TableTool.DataForCurrentRunChanged();
          SpriteTool.DataForCurrentRunChanged();
          CodeTool.DataForCurrentRunChanged();
+         LogTool.DataForCurrentRunChanged();
       }
 
       public IEnumerator<IToolViewModel> GetEnumerator() => tools.GetEnumerator();

@@ -221,6 +221,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels {
             dispatcher.BlockOnUIWork(() => {
                TabChangeRequestedEventArgs args;
                if (arg is string str) {
+                  tools?.LogTool.LogMessages.Add("Attempting to Goto Token: " + str);
                   var possibleMatches = Model.GetExtendedAutocompleteOptions(str);
                   if (possibleMatches.Count == 1) str = possibleMatches[0];
                   else if (possibleMatches.Count > 1 && possibleMatches.All(match => Model.GetMatchedWords(match).Any())) str = possibleMatches[0];
@@ -308,7 +309,12 @@ namespace HavenSoft.HexManiac.Core.ViewModels {
                   }
                }
 
-               selection.Goto.Execute(arg);
+               if (arg is int address) {
+                  tools?.LogTool.LogMessages.Add("Attempting to Goto Address: " + address.ToString());
+               }
+
+               if (arg is string stringArg) selection.Goto.Execute(new SelectionGotoArgs(stringArg, this));
+               else selection.Goto.Execute(arg);
 
                args = new TabChangeRequestedEventArgs(this);
                RequestTabChange?.Invoke(mapper, args);
@@ -891,7 +897,8 @@ namespace HavenSoft.HexManiac.Core.ViewModels {
 
       #endregion
 
-      public int FreeSpaceStart { get => Model.FreeSpaceStart; set {
+      public int FreeSpaceStart {
+         get => Model.FreeSpaceStart; set {
             if (Model.FreeSpaceStart != value) {
                Model.FreeSpaceStart = value;
                NotifyPropertyChanged();
@@ -943,6 +950,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels {
                   index = Model.ReadPointer(run.Start);
                   run = Model.GetNextRun(index);
                }
+               tools.LogTool.LogMessages.Add($"Attempting to Update Anchor at address {run.Start.ToAddress()}: {anchorText}");
                if (run.Start <= index) {
                   var token = new NoDataChangeDeltaModel();
 
@@ -958,7 +966,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels {
                   }
 
                   if (errorInfo == ErrorInfo.NoError) {
-                     OnError?.Invoke(this, string.Empty);
+                     RaiseError(string.Empty);
                      var newRun = Model.GetNextRun(index);
                      if (AnchorText == AnchorStart.ToString()) Model.ClearFormat(token, run.Start, 1);
                      if (newRun is ArrayRun array) {
@@ -974,7 +982,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels {
                      Tools.RefreshContent();
                      RefreshBackingData();
                   } else {
-                     OnError?.Invoke(this, errorInfo.ErrorMessage);
+                     RaiseError(errorInfo.ErrorMessage);
                   }
                   if (token.HasAnyChange) history.InsertCustomChange(token);
                }
@@ -1080,7 +1088,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels {
          selection = new Selection(scroll, Model, history, GetSelectionSpan);
          selection.PropertyChanged += SelectionPropertyChanged;
          selection.PreviewSelectionStartChanged += ClearActiveEditBeforeSelectionChanges;
-         selection.OnError += (sender, e) => OnError?.Invoke(this, e);
+         selection.OnError += (sender, e) => RaiseError(e);
          selection.RequestTabChanged += (sender, e) => {
             var request = new TabChangeRequestedEventArgs(e.Tab);
             RequestTabChange(this, request);
@@ -1095,7 +1103,8 @@ namespace HavenSoft.HexManiac.Core.ViewModels {
 
          if (this is not ChildViewPort) { // child viewports don't need tools
             tools = new ToolTray(Singletons, Model, selection, history, this);
-            Tools.OnError += (sender, e) => OnError?.Invoke(this, e);
+            tools.LogTool.LogMessages.Add($"Start of session {Name} - {DateTime.Now}");
+            Tools.OnError += (sender, e) => RaiseError(e);
             Tools.OnMessage += (sender, e) => RaiseMessage(e);
             tools.RequestMenuClose += (sender, e) => RequestMenuClose?.Invoke(this, e);
             Tools.StringTool.ModelDataChanged += ModelChangedByTool;
@@ -1104,6 +1113,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels {
             Tools.TableTool.ModelDataMoved += ModelDataMovedByTool;
             Tools.CodeTool.ModelDataChanged += ModelChangedByCodeTool;
             Tools.CodeTool.ModelDataMoved += ModelDataMovedByTool;
+            model.LogMessage += (sender, e) => tools.LogTool.LogMessages.Add(e);
             scroll.Scheduler = tools;
          }
 
@@ -1283,14 +1293,14 @@ namespace HavenSoft.HexManiac.Core.ViewModels {
          var copyText = scroll.ViewPointToDataIndex(selection.SelectionStart).ToString("X6");
          fileSystem.CopyText = copyText;
          RequestMenuClose?.Invoke(this, EventArgs.Empty);
-         OnMessage?.Invoke(this, $"'{copyText}' copied to clipboard.");
+         RaiseMessage($"'{copyText}' copied to clipboard.");
       }
 
       private void CopyBytesExecute(IFileSystem fileSystem) {
          var copyText = GetSelectedByteContents();
          fileSystem.CopyText = copyText;
          RequestMenuClose?.Invoke(this, EventArgs.Empty);
-         OnMessage?.Invoke(this, $"'{copyText}' copied to clipboard.");
+         RaiseMessage($"'{copyText}' copied to clipboard.");
       }
 
       private void CopyExecute(IFileSystem filesystem, bool allowModelChanges) {
@@ -1299,13 +1309,13 @@ namespace HavenSoft.HexManiac.Core.ViewModels {
          var left = Math.Min(selectionStart, selectionEnd);
          var length = Math.Abs(selectionEnd - selectionStart) + 1;
          if (length > Singletons.CopyLimit) {
-            OnError?.Invoke(this, $"Cannot copy more than {Singletons.CopyLimit} bytes at once!");
+            RaiseError($"Cannot copy more than {Singletons.CopyLimit} bytes at once!");
          } else {
             bool usedHistory = false;
             if (left + length > Model.Count) {
-               OnError?.Invoke(this, $"Cannot copy beyond the end of the data.");
+               RaiseError($"Cannot copy beyond the end of the data.");
             } else if (left < 0) {
-               OnError?.Invoke(this, $"Cannot copy before the start of the data.");
+               RaiseError($"Cannot copy before the start of the data.");
             } else {
                if (ThumbParser.IsThumbSelection(Model, left, length) && allowModelChanges) {
                   var text = tools.CodeTool.Parser.Parse(Model, left, length);
@@ -1332,7 +1342,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels {
          var left = Math.Min(selectionStart, selectionEnd);
          var length = Math.Abs(selectionEnd - selectionStart) + 1;
          if (length > Singletons.CopyLimit) {
-            OnError?.Invoke(this, $"Cannot copy more than {Singletons.CopyLimit} bytes at once!");
+            RaiseError($"Cannot copy more than {Singletons.CopyLimit} bytes at once!");
          } else {
             bool usedHistory = false;
             fileSystem.CopyText = Model.Copy(() => { usedHistory = true; return history.CurrentChange; }, left, length, deep: true);
@@ -1410,7 +1420,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels {
                   if (tableRun.ElementContent[contentIndex].Type == ElementContentType.Pointer) {
                      Model.ClearFormat(CurrentChange, index + i, 1);
                   }
-               } 
+               }
                if (run is PointerRun) Model.ClearFormat(CurrentChange, index + i, 1);
             }
             CurrentChange.ChangeData(Model, index + i, value);
@@ -1429,6 +1439,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels {
 
       public void Refresh() {
          scroll.DataLength = Model.Count;
+         Model.ClearCacheScope();
          var selectionStart = ConvertViewPointToAddress(SelectionStart);
          if (selectionStart > Model.Count + 1) SelectionStart = ConvertAddressToViewPoint(Model.Count + 1);
          scroll.UpdateHeaders();
@@ -1437,6 +1448,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels {
          Tools?.TableTool.DataForCurrentRunChanged();
          Tools?.SpriteTool.DataForCurrentRunChanged();
          Tools?.CodeTool.ClearConstantCache();
+         Tools?.CodeTool.DataForCurrentRunChanged();
          UpdateAnchorText(ConvertViewPointToAddress(SelectionStart));
       }
 
@@ -1502,12 +1514,15 @@ namespace HavenSoft.HexManiac.Core.ViewModels {
          return false;
       }
 
-      public void RaiseError(string text) => OnError?.Invoke(this, text);
+      public void RaiseError(string text) {
+         tools.LogTool.LogMessages.Add("Error: " + text);
+         OnError?.Invoke(this, text);
+      }
 
       private string deferredMessage;
       public void RaiseMessage(string text) {
-         // TODO queue multiple messages.
          deferredMessage = text;
+         tools.LogTool.LogMessages.Add("Message: " + deferredMessage);
          tools.Schedule(RaiseMessage);
       }
       private void RaiseMessage() => OnMessage?.Invoke(this, deferredMessage);
@@ -1779,7 +1794,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels {
          }
 
          if (destination is ArrayRun) {
-            OnError?.Invoke(this, "Cannot automatically duplicate a table. This operation is unsafe.");
+            RaiseError("Cannot automatically duplicate a table. This operation is unsafe.");
             return;
          }
 
@@ -1796,7 +1811,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels {
 
             history.CurrentChange.ChangeData(Model, newDestination, newCompressed);
          } else if (destination.PointerSources.Count < 2) {
-            OnError?.Invoke(this, "This is the only pointer, no need to make a new copy.");
+            RaiseError("This is the only pointer, no need to make a new copy.");
             return;
          } else {
             newDestination = Model.FindFreeSpace(destination.Start, destination.Length);
@@ -1814,7 +1829,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels {
          Model.WritePointer(CurrentChange, pointer, newDestination); // point to the new destination
          var destination2 = Model.GetNextRun(destination.Start);
          Model.ObserveRunWritten(CurrentChange, destination2.Duplicate(newDestination, new SortedSpan<int>(pointer))); // create a new run at the new destination
-         OnMessage?.Invoke(this, "New Copy added at " + newDestination.ToString("X6"));
+         RaiseMessage("New Copy added at " + newDestination.ToString("X6"));
       }
 
       public void OpenInNewTab(int destination) {
@@ -1826,12 +1841,12 @@ namespace HavenSoft.HexManiac.Core.ViewModels {
       private bool CreateNewData(int pointer) {
          var errorText = "Can only create new data for a pointer with a format within a table.";
          if (!(Model.GetNextRun(pointer) is ITableRun tableRun)) {
-            OnError?.Invoke(this, errorText);
+            RaiseError(errorText);
             return false;
          }
          var offsets = tableRun.ConvertByteOffsetToArrayOffset(pointer);
          if (!(tableRun.ElementContent[offsets.SegmentIndex] is ArrayRunPointerSegment pointerSegment) || !pointerSegment.IsInnerFormatValid) {
-            OnError?.Invoke(this, errorText);
+            RaiseError(errorText);
             return false;
          }
 
@@ -1896,7 +1911,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels {
          Model.WritePointer(CurrentChange, source, newDestination); // point to the new destination
          var newRun = run.Duplicate(newDestination, new SortedSpan<int>(source));
          Model.ObserveRunWritten(CurrentChange, newRun); // create a new run at the new destination
-         OnMessage?.Invoke(this, $"Run moved to {newDestination:X6}. This pointer was updated, original data was not modified.");
+         RaiseMessage($"Run moved to {newDestination:X6}. This pointer was updated, original data was not modified.");
          Refresh();
       }
 
@@ -2229,9 +2244,9 @@ namespace HavenSoft.HexManiac.Core.ViewModels {
 
       private void NotifyNumberOfResults(string rawSearch, int results) {
          if (results == 1) {
-            OnMessage?.Invoke(this, $"Found only 1 match for '{rawSearch}'.");
+            RaiseMessage($"Found only 1 match for '{rawSearch}'.");
          } else if (results > 1) {
-            OnMessage?.Invoke(this, $"Found {results} matches for '{rawSearch}'.");
+            RaiseMessage($"Found {results} matches for '{rawSearch}'.");
          }
       }
 
@@ -2273,7 +2288,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels {
                continue;
             }
 
-            if (errorOnParseError) OnError?.Invoke(this, $"Could not parse search term {cleanedSearchString.Substring(i)}");
+            if (errorOnParseError) RaiseError($"Could not parse search term {cleanedSearchString.Substring(i)}");
             return false;
          }
 
@@ -2353,6 +2368,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels {
             // follow pointer
             if (format is Pointer pointer) {
                if (pointer.Destination != Pointer.NULL) {
+                  tools.LogTool.LogMessages.Add($"Follow Link {pointer.DestinationAsText}");
                   selection.GotoAddress(pointer.Destination);
                } else if (string.IsNullOrEmpty(pointer.DestinationName)) {
                   OnError(this, $"null pointers point to nothing, so going to their source isn't possible.");
@@ -2457,7 +2473,8 @@ namespace HavenSoft.HexManiac.Core.ViewModels {
                // try again soon.
                RequestDelayedWork?.Invoke(this, () => ConsiderReload(fileSystem));
             }
-         };
+         }
+         ;
 
          if (fileSystem is IWorkDispatcher dispatcher) {
             dispatcher.BlockOnUIWork(action);
@@ -2553,6 +2570,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels {
 
       private List<ViewPort> RecentDuplicates = new();
       public void GotoScript(int address) {
+         tools.LogTool.LogMessages.Add("Goto Script: " + address.ToAddress());
          if (RecentDuplicates.Count == 0) RecentDuplicates.Add(this);
 
          int start;
@@ -2598,7 +2616,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels {
             if (array == null) continue;
             var actualValue = Model.ReadValue(wordRun.Start);
             if (array.ElementCount == actualValue) continue;
-            OnMessage?.Invoke(this, $"MatchedWord at {wordRun.Start:X6} was expected to have value {array.ElementCount}, but was {actualValue}.");
+            RaiseMessage($"MatchedWord at {wordRun.Start:X6} was expected to have value {array.ElementCount}, but was {actualValue}.");
             Goto.Execute(wordRun.Start.ToString("X6"));
             break;
          }
@@ -2609,12 +2627,12 @@ namespace HavenSoft.HexManiac.Core.ViewModels {
          var run1 = Model.GetNextRun(selectionPoint);
          var run2 = Model.GetNextRun(selectionPoint + 1);
          if (run1.Start + 32 != run2.Start || !(run1 is NoInfoRun)) {
-            OnError?.Invoke(this, "Palettes insertion requires a no-format anchor with exactly 32 bytes of space.");
+            RaiseError("Palettes insertion requires a no-format anchor with exactly 32 bytes of space.");
             return;
          }
          for (int i = 0; i < 16; i++) {
             if (Model.ReadMultiByteValue(run1.Start + i * 2, 2) >= 0x8000) {
-               OnError?.Invoke(this, $"Palette colors only use 15 bits, but the high bit it set at {run1.Start + i * 2 + 1:X6}.");
+               RaiseError($"Palette colors only use 15 bits, but the high bit it set at {run1.Start + i * 2 + 1:X6}.");
                return;
             }
          }
@@ -2720,9 +2738,9 @@ namespace HavenSoft.HexManiac.Core.ViewModels {
             var startPlaces = Model.FindPossibleTextStartingPlaces(left, length);
 
             // do the actual search now that we know places to start
-            var foundCount = Model.ConsiderResultsAsTextRuns( () => history.InsertCustomChange(new NoDataChangeDeltaModel()), startPlaces);
+            var foundCount = Model.ConsiderResultsAsTextRuns(() => history.InsertCustomChange(new NoDataChangeDeltaModel()), startPlaces);
             if (foundCount == 0) {
-               OnError?.Invoke(this, "Failed to automatically find text at that location.");
+               RaiseError("Failed to automatically find text at that location.");
             } else {
                RefreshBackingData();
             }
@@ -2864,8 +2882,8 @@ namespace HavenSoft.HexManiac.Core.ViewModels {
                      tools.Schedule(tools.SpriteTool.DataForCurrentRunChanged);
                      tools.Schedule(tools.TableTool.DataForCurrentRunChanged);
                   }
-                  if (completeEditOperation.MessageText != null) OnMessage?.Invoke(this, completeEditOperation.MessageText);
-                  if (completeEditOperation.ErrorText != null) OnError?.Invoke(this, completeEditOperation.ErrorText);
+                  if (completeEditOperation.MessageText != null) RaiseMessage(completeEditOperation.MessageText);
+                  if (completeEditOperation.ErrorText != null) RaiseError(completeEditOperation.ErrorText);
 
                   // refresh the screen
                   RefreshBackingData(point);
@@ -2898,7 +2916,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels {
                   if (CreateNewData(currentAddress)) {
                      destination = Model.ReadPointer(currentAddress);
                   } else {
-                     OnError?.Invoke(this, $"Could not jump using pointer at {currentAddress:X6}");
+                     RaiseError($"Could not jump using pointer at {currentAddress:X6}");
                   }
                }
                ClearEdits(point);
@@ -2908,7 +2926,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels {
                      selection.SetJumpBackPoint(currentAddress + 4);
                   }
                } else if (destination != Pointer.NULL) {
-                  OnError?.Invoke(this, $"Could not jump using pointer at {currentAddress:X6}");
+                  RaiseError($"Could not jump using pointer at {currentAddress:X6}");
                }
                RequestMenuClose?.Invoke(this, EventArgs.Empty);
                result = true;
@@ -3096,7 +3114,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels {
                RaiseError($"Writing {length} 00 bytes would overwrite existing data.");
                exitEditEarly = true;
             }
-         } else if (command.StartsWith("ff(")&&paramsEnd>3&&command.Substring(3,paramsEnd-3).TryParseInt(out length)) {
+         } else if (command.StartsWith("ff(") && paramsEnd > 3 && command.Substring(3, paramsEnd - 3).TryParseInt(out length)) {
             var currentRun = Model.GetNextRun(index);
             if (currentRun.Start < index || (currentRun.Start == index && currentRun is not NoInfoRun) || (currentRun.Start > index && currentRun.Start < index + length)) {
                RaiseError($"Writing {length} FF bytes would overwrite formatted data.");
@@ -3286,8 +3304,8 @@ namespace HavenSoft.HexManiac.Core.ViewModels {
 
       public void HandleErrorInfo(ErrorInfo info) {
          if (!info.HasError) return;
-         if (info.IsWarning) OnMessage?.Invoke(this, info.ErrorMessage);
-         else OnError?.Invoke(this, info.ErrorMessage);
+         if (info.IsWarning) RaiseMessage(info.ErrorMessage);
+         else RaiseError(info.ErrorMessage);
       }
 
       /// <summary>
@@ -3314,7 +3332,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels {
          }
 
          if (run is ITableRun && sender != Tools.StringTool && Model.GetNextRun(Tools.StringTool.Address).Start == run.Start) Tools.StringTool.DataForCurrentRunChanged();
-         if (run is ITableRun && Model.GetNextRun(Tools.TableTool.Address).Start  == run.Start) Tools.TableTool.DataForCurrentRunChanged();
+         if (run is ITableRun && Model.GetNextRun(Tools.TableTool.Address).Start == run.Start) Tools.TableTool.DataForCurrentRunChanged();
       }
 
       private void ModelDataMovedByTool(object sender, (int originalLocation, int newLocation) locations) {

@@ -215,15 +215,21 @@ namespace HavenSoft.HexManiac.Core.Models.Code {
       public MacroScriptLine GetMacro(IDataModel model, int address) => engine.GetMatchingMacro(gameHash, model, address);
       public ScriptLine GetLine(IDataModel model, int address) => engine.GetMatchingLine(gameHash, model, address);
 
+      // for each table, a list of scripts lines that depend on it.
+      private Dictionary<string, List<IScriptLine>> tableDependencyCache = new();
+
       public IEnumerable<IScriptLine> DependsOn(string basename) {
+         lock (tableDependencyCache) if (tableDependencyCache.ContainsKey(basename)) return tableDependencyCache[basename];
+         var matches = new List<IScriptLine>();
          foreach (var line in engine) {
             foreach (var arg in line.Args) {
                if (arg.EnumTableName == basename) {
-                  yield return line;
+                  matches.Add(line);
                   break;
                }
             }
          }
+         lock (tableDependencyCache) return tableDependencyCache[basename] = matches;
       }
 
       private HashSet<string> constantCache, keywordCache;
@@ -442,7 +448,7 @@ namespace HavenSoft.HexManiac.Core.Models.Code {
                break;
             }
             if (close == -1) {
-               if (i == caret) {
+               if (i == caret || (i == caret - 1 && caret == text.Count)) {
                   text.Insert(i + 1, '\r');
                   text.Insert(i + 2, '\n');
                }
@@ -471,6 +477,7 @@ namespace HavenSoft.HexManiac.Core.Models.Code {
 
             // special case: no blank line between open and close
             if (close == i + 3) {
+               while (text.Count < i) text.Add(' ');
                text.Insert(i + 1, '\r');
                text.Insert(i + 2, '\n');
                if (i < caret) { caret += 2; caretMove -= 2; }
@@ -820,7 +827,7 @@ namespace HavenSoft.HexManiac.Core.Models.Code {
             partialDocumentation = candidates[0].Usage + Environment.NewLine + string.Join(Environment.NewLine, candidates[0].Documentation);
          }
 
-         if (context.Index > 0 && context.Line[context.Index - 1] == ' ' && tokens.Length > 0) {
+         if (context.Index > 0 && context.Index < context.Line.Length && context.Line[context.Index - 1] == ' ' && tokens.Length > 0) {
             // I'm directly after a space, I'm at the start of a new token, there is no existing documentation
             var skipCount = candidates[0].LineCode.Count;
             if (skipCount == 0) skipCount = 1;

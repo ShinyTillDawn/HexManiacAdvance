@@ -18,6 +18,8 @@ namespace HavenSoft.HexManiac.Core.Models {
       /// </summary>
       Task InitializationWorkload { get; }
 
+      event EventHandler<string>? LogMessage;
+
       byte[] RawData { get; }
       ModelCacheScope CurrentCacheScope { get; }
       int ReferenceCount { get; set; }
@@ -86,6 +88,7 @@ namespace HavenSoft.HexManiac.Core.Models {
       void ClearFormat(ModelDelta changeToken, int start, int length);
       void ClearData(ModelDelta changeToken, int start, int length);
       void ClearFormatAndData(ModelDelta changeToken, int start, int length);
+      void ClearCacheScope();
       void SetList(ModelDelta changeToken, string name, IEnumerable<string> list, IReadOnlyDictionary<int, string> comments, string hash);
       void UpdateGotoShortcut(int index, GotoShortcutModel shortcut);
       void ClearPointer(ModelDelta currentChange, int source, int destination);
@@ -134,10 +137,13 @@ namespace HavenSoft.HexManiac.Core.Models {
 
       public Task InitializationWorkload { get; protected set; }
 
+      public event EventHandler<string>? LogMessage;
+      protected void RaiseLogMessage(string message) => LogMessage?.Invoke(this, message);
+
       public byte[] RawData { get; private set; }
 
       private ModelCacheScope currentCacheScope;
-      protected void ClearCacheScope() => currentCacheScope = null;
+      public void ClearCacheScope() => currentCacheScope = null;
       public ModelCacheScope CurrentCacheScope {
          get {
             var instance = currentCacheScope;
@@ -833,6 +839,8 @@ namespace HavenSoft.HexManiac.Core.Models {
       public static IReadOnlyList<string> GetOptions(this IDataModel model, string tableName) => ModelCacheScope.GetCache(model).GetOptions(tableName);
 
       public static IReadOnlyList<string> GetBitOptions(this IDataModel model, string tableName) => ModelCacheScope.GetCache(model).GetBitOptions(tableName);
+
+      public static bool TryMatch(this IReadOnlyList<string> list, string text, out int value) => ArrayRunEnumSegment.TryMatch(text, list, out value);
 
       public static IEnumerable<ArrayRun> GetRelatedArrays(this IDataModel model, ArrayRun table) {
          yield return table; // a table is related to itself

@@ -8,6 +8,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels {
    public enum TextFormatting { None, Keyword, Constant, Numeric, Comment, Text }
    public interface ITextPreProcessor {
       TextFormatting[] Format(string content);
+      IEnumerable<TextSegment> FindErrors(string content);
    }
 
    public class TextEditorViewModel : ViewModelCore {
@@ -44,6 +45,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels {
       public string Content {
          get => content;
          set {
+            value ??= string.Empty;
             if (content == value) return;
             var oldContent = content;
             content = value;
@@ -78,6 +80,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels {
       public void FocusKeyboard() => RequestKeyboardFocus.Raise(this);
 
       private void UpdateLayers() {
+         ErrorLocations.Clear();
          if (content.Length == 0) {
             if (PlainContent.Length != 0) {
                PlainContent = AccentContent =
@@ -113,6 +116,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels {
                if (pre[i] == TextFormatting.Text) text.Replace(i, basic, i, 1);
                basic.Clear(i, 1);
             }
+            foreach (var error in PreFormatter.FindErrors(Content)) ErrorLocations.Add(error);
          }
 
          // comments
@@ -179,6 +183,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels {
          NumericContent = numeric.ToString();
          CommentContent = comments.ToString();
          TextContent = text.ToString();
+
          NotifyPropertiesChanged(
             nameof(PlainContent),
             nameof(AccentContent),
@@ -231,8 +236,8 @@ namespace HavenSoft.HexManiac.Core.ViewModels {
                yield return (i, closeIndex - i + 1);
                i = closeIndex + 1;
             }
-            if (i < content.Length && !char.IsLetter(content[i])) continue;
-            int length = 1;                                                                                               
+            if (i < content.Length && !char.IsLetterOrDigit(content[i])) continue; // some constants _do_ start with numbers, like 2to5Hits
+            int length = 1;
             while (i + length < content.Length && (char.IsLetterOrDigit(content[i + length]) || content[i + length].IsAny(".'-~_\\".ToCharArray()))) length++;
             yield return (i, length);
             i += length;
@@ -277,13 +282,14 @@ namespace HavenSoft.HexManiac.Core.ViewModels {
                   length++;
                   continue;
                }
-               if (content[i+length].IsAny(hexLetters)) {
+               if (content[i + length].IsAny(hexLetters)) {
                   length++;
                   continue;
                }
                if (!char.IsDigit(content[i + length])) break;
                length++;
             }
+            if (length < 0) continue;
             if (i + length < content.Length && char.IsLetter(content[i + length])) continue;
             return (i, length);
          }

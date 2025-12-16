@@ -28,13 +28,15 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Tools {
       ICommand CodeToolCommand { get; }
       ICommand SpriteToolCommand { get; }
 
-      PCSTool StringTool { get; }
+      PCSTool? StringTool { get; }
 
-      TableTool TableTool { get; }
+      TableTool? TableTool { get; }
 
-      CodeTool CodeTool { get; }
+      CodeTool? CodeTool { get; }
 
-      SpriteTool SpriteTool { get; }
+      SpriteTool? SpriteTool { get; }
+
+      LogTool? LogTool { get; }
 
       IDisposable DeferUpdates { get; }
 
@@ -59,7 +61,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Tools {
    // shared interface for fields/comboboxes to appear in multi-boxes
    public interface IMultiEnabledArrayElementViewModel : IArrayElementViewModel {
       string Name { get; set; }
-   } 
+   }
 
    public class SplitterArrayElementViewModel : ViewModelCore, IArrayElementViewModel {
       event EventHandler IArrayElementViewModel.DataChanged { add { } remove { } }

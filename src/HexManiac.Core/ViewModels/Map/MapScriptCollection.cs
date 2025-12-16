@@ -11,6 +11,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Map {
 
    public class MapScriptCollection : ViewModelCore {
       private readonly IEditableViewPort viewPort;
+      private readonly EventTemplate eventTemplate;
       private ModelArrayElement owner;
       private int address;
 
@@ -18,12 +19,15 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Map {
       public bool Unloaded => address == 0;
       public ObservableCollection<MapScriptViewModel> Scripts { get; } = new();
       public bool CollectionExists => address > 0;
+      public bool AllowAddMoreScripts { get; private set; } = true;
 
       public event EventHandler<NewMapScriptsCreatedEventArgs> NewMapScriptsCreated;
 
-      public MapScriptCollection(IEditableViewPort viewPort) => this.viewPort = viewPort;
+      public MapScriptCollection(IEditableViewPort viewPort, EventTemplate eventTemplate) => (this.viewPort, this.eventTemplate) = (viewPort, eventTemplate);
 
+      // owner is expected to be the map that owns the map scripts
       public void Load(ModelArrayElement owner) {
+         foreach (var script in Scripts) script.DeleteMe -= HandleDelete;
          Scripts.Clear();
          this.owner = owner;
          if (owner == null) return;
@@ -31,12 +35,18 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Map {
          if (address == Pointer.NULL) return;
          var model = viewPort.Model;
          var scriptStart = address;
+         AllowAddMoreScripts = true;
          while (model[scriptStart] != 0) {
-            Scripts.Add(new(viewPort, scriptStart));
+            if (Scripts.Count == 10) {
+               Scripts.Add(new(viewPort, eventTemplate, Pointer.NULL)); // 'UI is full' sentinel
+               AllowAddMoreScripts = false;
+               break;
+            }
+            Scripts.Add(new(viewPort, eventTemplate, scriptStart));
             AddDeleteHandler(Scripts.Count - 1);
             scriptStart += 5;
          }
-         NotifyPropertiesChanged(nameof(CollectionExists), nameof(Unloaded), nameof(Address));
+         NotifyPropertiesChanged(nameof(CollectionExists), nameof(Unloaded), nameof(Address), nameof(AllowAddMoreScripts));
       }
 
       public bool CanCreateCollection => address < 0;
@@ -62,7 +72,9 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Map {
          var model = viewPort.Model;
          var run = model.GetNextRun(address) as ITableRun;
          if (run == null) return;
+         var originalRun = run;
          run = model.RelocateForExpansion(token, run, run.Length + 5);
+         if (originalRun.Start != run.Start) viewPort.RaiseMessage($"Repointed data from {originalRun.Start.ToAddress()} to {run.Start.ToAddress()}.");
          run = run.Append(token, 1);
          address = run.Start;
          var newScript = model.FindFreeSpace(model.FreeSpaceStart, 1);
@@ -71,9 +83,8 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Map {
          model.UpdateArrayPointer(token, default, default, default, run.Start + run.Length - 5, newScript);
          model.ObserveRunWritten(token, run);
          model.ObserveRunWritten(token, new XSERun(newScript));
-         Scripts.Add(new(viewPort, address + Scripts.Count * 5));
-         AddDeleteHandler(Scripts.Count - 1);
          viewPort.ChangeHistory.ChangeCompleted();
+         Load(owner); // do a full reload, in case we need to truncate scripts
       }
 
       private void AddDeleteHandler(int index) {
@@ -88,16 +99,15 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Map {
          var tableRun = model.GetNextRun(address) as ITableRun;
          if (tableRun == null) return;
          var table = new ModelTable(model, tableRun, () => token); // type. pointer<>
-         for (int i = index; i < Scripts.Count - 1; i++) {
+         for (int i = index; i < table.Count - 1; i++) {
             table[i].SetValue(0, table[i + 1].GetValue(0));
             table[i].SetAddress("pointer", table[i + 1].GetAddress("pointer"));
          }
          tableRun = tableRun.Append(token, -1);
          model.ObserveRunWritten(token, tableRun);
-         Scripts[index].DeleteMe -= HandleDelete;
-         Scripts.RemoveAt(index);
          e.Success = true;
          viewPort.ChangeHistory.ChangeCompleted();
+         Load(owner); // do a reload, in case we were truncating scripts.
       }
    }
 
@@ -107,6 +117,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Map {
 
    public class MapScriptViewModel : ViewModelCore {
       private readonly IEditableViewPort viewPort;
+      private readonly EventTemplate eventTemplate;
       private readonly int start;
       private int scriptType, address;
       private string displayAddress;
@@ -114,14 +125,21 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Map {
       public event EventHandler<MapScriptDeleteEventArgs> DeleteMe;
 
       public bool HasSubScripts => scriptType == 2 || scriptType == 4;
+      public bool MoreScriptsTruncated { get; } = false;
+      public bool ShowMapScript => !MoreScriptsTruncated;
 
       public ObservableCollection<VisualOption> ScriptOptions { get; } = new();
       public ObservableCollection<MapSubScriptViewModel> SubScripts { get; } = new();
 
-      public MapScriptViewModel(IEditableViewPort viewPort, int start) {
+      public MapScriptViewModel(IEditableViewPort viewPort, EventTemplate eventTemplate, int start) {
          this.viewPort = viewPort;
+         this.eventTemplate = eventTemplate;
          var model = viewPort.Model;
          this.start = start;
+         if (start == Pointer.NULL) {
+            MoreScriptsTruncated = true;
+            return;
+         }
          this.scriptType = model[start];
          this.address = model.ReadPointer(start + 1);
          this.displayAddress = $"<{address:X6}>";
@@ -179,7 +197,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Map {
             while (true) {
                var currentValue = model.ReadMultiByteValue(destination, 2);
                if (currentValue == 0 || currentValue == 0xFFFF) break;
-               var child = new MapSubScriptViewModel(viewPort, destination);
+               var child = new MapSubScriptViewModel(viewPort, eventTemplate, destination);
                child.DeleteMe += HandleDelete;
                SubScripts.Add(child);
                destination += 8;
@@ -244,6 +262,8 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Map {
          });
       }
 
+      public int ScriptAddress => address;
+
       public IReadOnlyCollection<int> GetScripts() {
          var results = new List<int>();
          foreach (var script in SubScripts) {
@@ -261,8 +281,10 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Map {
 
          var run = model.GetNextRun(address);
          if (run is not ITableRun tableRun) return;
+         var originalRun = tableRun;
          tableRun = tableRun.Append(token, 1);
          model.ObserveRunWritten(token, tableRun);
+         if (originalRun.Start != tableRun.Start) viewPort.RaiseMessage($"Repointed data from {originalRun.Start.ToAddress()} to {tableRun.Start.ToAddress()}.");
 
          // add new element data
          var newScriptStart = model.FindFreeSpace(model.FreeSpaceStart, 1);
@@ -276,7 +298,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Map {
          if (run.Start != tableRun.Start) {
             Load();
          } else {
-            SubScripts.Append(new MapSubScriptViewModel(viewPort, tableRun.Start + tableRun.ElementCount * tableRun.ElementLength - 4));
+            SubScripts.Append(new MapSubScriptViewModel(viewPort, eventTemplate, tableRun.Start + tableRun.ElementCount * tableRun.ElementLength - 4));
          }
       }
 
@@ -317,6 +339,7 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Map {
    /// </summary>
    public class MapSubScriptViewModel : ViewModelCore {
       private readonly IEditableViewPort viewPort;
+      private readonly EventTemplate eventTemplate;
       private int start, variable, val, address;
       private string variableText, valueText, addressText;
 
@@ -324,8 +347,8 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Map {
 
       public event EventHandler<MapScriptDeleteEventArgs> DeleteMe;
 
-      public MapSubScriptViewModel(IEditableViewPort viewPort, int start) {
-         (this.viewPort, this.start) = (viewPort, start);
+      public MapSubScriptViewModel(IEditableViewPort viewPort, EventTemplate eventTemplate, int start) {
+         (this.viewPort, this.eventTemplate, this.start) = (viewPort, eventTemplate, start);
          this.variable = viewPort.Model.ReadMultiByteValue(start, 2);
          this.val = viewPort.Model.ReadMultiByteValue(start + 2, 2);
          this.address = viewPort.Model.ReadPointer(start + 4);
@@ -335,25 +358,40 @@ namespace HavenSoft.HexManiac.Core.ViewModels.Map {
          addressText = $"<{address:X6}>";
       }
 
-      public string Variable { get => variableText; set => Set(ref variableText, value, arg => {
-         if (!variableText.TryParseHex(out int result)) return;
-         variable = result;
-         viewPort.Model.WriteMultiByteValue(start, 2, viewPort.ChangeHistory.CurrentChange, variable);
-      }); }
+      public string Variable {
+         get => variableText; set => Set(ref variableText, value, arg => {
+            if (!variableText.TryParseHex(out int result)) return;
+            variable = result;
+            viewPort.Model.WriteMultiByteValue(start, 2, viewPort.ChangeHistory.CurrentChange, variable);
+            NotifyPropertyChanged(nameof(CanGenerateNewVar));
+         });
+      }
 
-      public string Value { get => valueText; set => Set(ref valueText, value, arg => {
-         if (!int.TryParse(valueText, out int result)) return;
-         val = result;
-         viewPort.Model.WriteMultiByteValue(start + 2, 2, viewPort.ChangeHistory.CurrentChange, val);
-      }); }
+      public string Value {
+         get => valueText; set => Set(ref valueText, value, arg => {
+            if (!int.TryParse(valueText, out int result)) return;
+            val = result;
+            viewPort.Model.WriteMultiByteValue(start + 2, 2, viewPort.ChangeHistory.CurrentChange, val);
+         });
+      }
 
-      public string Address { get => addressText; set => Set(ref addressText, value, arg => {
-         var text = addressText.Trim("<> ".ToCharArray());
-         if (!text.TryParseHex(out int result)) return;
-         // do the same work that we do in the code tool, removing scripts that aren't needed
-         address = result;
-         viewPort.Model.UpdateArrayPointer(viewPort.ChangeHistory.CurrentChange, default, default, -1, start + 4, address);
-      }); }
+      public string Address {
+         get => addressText; set => Set(ref addressText, value, arg => {
+            var text = addressText.Trim("<> ".ToCharArray());
+            if (!text.TryParseHex(out int result)) return;
+            // do the same work that we do in the code tool, removing scripts that aren't needed
+            address = result;
+            viewPort.Model.UpdateArrayPointer(viewPort.ChangeHistory.CurrentChange, default, default, -1, start + 4, address);
+         });
+      }
+
+      public int ScriptAddress => address;
+
+      public bool CanGenerateNewVar => variable == 0;
+      public void GenerateNewVar() {
+         variable = eventTemplate.FindNextUnusedVariable();
+         Variable = variable.ToString("X4");
+      }
 
       public void Delete() {
          var args = new MapScriptDeleteEventArgs();
