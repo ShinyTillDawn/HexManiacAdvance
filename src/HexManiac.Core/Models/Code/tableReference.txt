@@ -861,6 +861,13 @@ sound.pokemon.cry.growl,               0752D8, 0752DC, 0752F8, 0752FC, 072104, 0
 sound.pokemon.cry.normal,              0752E8, 0752EC, 075308, 07530C, 072114, 072114, 072128, 072128, 0A35EC, ^[type.|h key. length. pan_sweep. p<> attack. decay. sustain. release.]data.pokemon.names-24
 sound.pokemon.cry.hoennconversion,     03F928, 03F928, 03F928, 03F928, 043328, 043328, 04333C, 04333C, 06D534, [index:]data.pokemon.names-277
 
+// Tested for FireRed 1.0 only (so far)
+scripts.overworld.behaviors.bookshelf,    0685B4, 0685B4, 0685D0, 0685D0, 06D244, 06D244, 06D258, 06D258, 09C5D4, `xse`
+scripts.overworld.behaviors.shop_counter, 0685CC, 0685CC, 0685E8, 0685E8, 06D25C, 06D25C, 06D270, 06D270, 09C5EC, `xse`
+
+
+
+
 // From Shiny Till Dawn:
 data.pokemon.moves.details.flail.chart,      02865C, 02865C, 02865C, 02865C, 02A4CC, 02A4CC, 02A4E0, 02A4E0, 053254, [hpbenchmark. power.]6 
 data.abilities.pickup.probabilities,               ,       ,       ,       ,       ,       ,       ,       , 055DF0, [cumulativeProb.]9
