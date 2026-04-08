@@ -877,7 +877,17 @@ scripts.overworld.behaviors.fridge,               0685E4, 0685E4, 068600, 068600
 scripts.overworld.behvaiors.indigo_plateau1,      068858, 068858, 068874, 068874, 06D4E8, 06D4E8, 06D4FC, 06D4FC, 09C878, `xse` 
 scripts.overworld.behvaiors.indigo_plateau2,      068874, 068874, 068890, 068890, 06D504, 06D504, 06D518, 06D518, 09C894, `xse` 
 scripts.overworld.behaviors.pretty_picture,       068704, 068704, 068720, 068720, 06D394, 06D394, 06D3A8, 06D3A8, 09C724, `xse` 
-
+scripts.overworld.behaviors.machine,              06871C, 06871C, 068738, 068738, 06D3AC, 06D3AC, 06D3C0, 06D3C0, 09C73C, `xse` 
+scripts.overworld.behaviors.telephone,            068734, 068734, 068750, 068750, 06D3C4, 06D3C4, 06D3D8, 06D3D8, 09C754, `xse` 
+scripts.overworld.behaviors.nonsense_computer,    06865C, 06865C, 068678, 068678, 06D2EC, 06D2EC, 06D300, 06D300, 09C67C, `xse` 
+scripts.overworld.behaviors.poster,               06874C, 06874C, 068768, 068768, 06D3DC, 06D3DC, 06D3F0, 06D3F0, 09C76C, `xse`
+scripts.overworld.behaviors.smells_tasty,         068764, 068764, 068780, 068780, 06D3F4, 06D3F4, 06D408, 06D408, 09C784, `xse` 
+scripts.overworld.behaviors.trashcan,             06877C, 06877C, 068798, 068798, 06D40C, 06D40C, 06D420, 06D420, 09C79C, `xse`
+scripts.overworld.behaviors.cup,                  068794, 068794, 0687B0, 0687B0, 06D424, 06D424, 06D438, 06D438, 09C7B4, `xse` 
+scripts.overworld.behaviors.window1,              0687AC, 0687AC, 0687C8, 0687C8, 06D43C, 06D43C, 06D450, 06D450, 09C7CC, `xse` 
+scripts.overworld.behaviors.window2,              0687C4, 0687C4, 0687E0, 0687E0, 06D454, 06D454, 06D468, 06D468, 09C7E4, `xse` 
+scripts.overworld.behaviors.lights,               0687DC, 0687DC, 0687F8, 0687F8, 06D46C, 06D46C, 06D480, 06D480, 09C7FC, `xse`
+scripts.overworld.behaviors.tools,                0687F4, 0687F4, 068810, 068810, 06D484, 06D484, 06D498, 06D498, 09C814, `xse` 
 
 
 
