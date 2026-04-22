@@ -532,7 +532,7 @@ Name = '''moveeffectoptions'''
    '''Unused16''',
    '''LowerAccuracy1Primary''',
    '''LowerEvasion1Primary''',
-   '''RemoveStateChanges''',
+   '''RemoveStatChanges''',
    '''Bide''',
    '''2to3turnsThenConfused''',
    '''OpponentSwitch''',
